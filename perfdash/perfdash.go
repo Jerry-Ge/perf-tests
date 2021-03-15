@@ -19,54 +19,54 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
-	"time"
+	"sort"
 
 	"github.com/spf13/pflag"
 	"k8s.io/klog"
 )
 
-const (
-	pollDuration = 10 * time.Minute
-	errorDelay   = 10 * time.Second
-	maxBuilds    = 100
+type JobToCategoryData map[string]CategoryToMetricData
 
-	s3Mode  = "s3"
-	gcsMode = "gcs"
-)
+type CategoryToMetricData map[string]MetricToBuildData
 
-var options = &DownloaderOptions{}
+type MetricToBuildData map[string]*BuildData
+
+type BuildData struct {
+	Builds  map[string][]DataItem `json:"builds"`
+	Job     string                `json:"job"`
+	Version string                `json:"version"`
+}
+
+// DataItem is the data point.
+type DataItem struct {
+	// Data is a map from bucket to real data point (e.g. "Perc90" -> 23.5). Notice
+	// that all data items with the same label combination should have the same buckets.
+	Data map[string]float64 `json:"data"`
+	// Unit is the data unit. Notice that all data items with the same label combination
+	// should have the same unit.
+	Unit string `json:"unit"`
+	// Labels is the labels of the data item.
+	Labels Label `json:"labels,omitempty"`
+}
+
+type Data struct {
+	Perc50 float64 `json:"Perc50"`
+	Perc90 float64 `json:"Perc90"`
+	Perc99 float64 `json:"Perc99"`
+}
+
+type Label struct {
+	Metric string `json:"Metric"`
+}
 
 var (
 	addr   = pflag.String("address", ":8080", "The address to serve web data on")
 	www    = pflag.Bool("www", false, "If true, start a web-server to server performance data")
 	wwwDir = pflag.String("dir", "www", "If non-empty, add a file server for this directory at the root of the web server")
-
-	storageURL = pflag.String("storageURL", "https://prow.k8s.io/view/gcs", "Name of the data bucket")
-
-	globalConfig = make(map[string]string)
-
-	// Storage Service Bucket and Path flags
-	logsBucket = pflag.String("logsBucket", "kubernetes-jenkins", "Name of the data bucket")
-	logsPath   = pflag.String("logsPath", "logs", "Path to the logs inside the logs bucket")
-
-	// Google GCS Specific flags
-	credentialPath = pflag.String("credentialPath", "", "Path to the gcs credential json")
-
-	// AWS S3 Specific flags
-	awsRegion = pflag.String("aws-region", "us-west-2", "AWS region of the S3 bucket")
 )
-
-func initDownloaderOptions() {
-	pflag.StringVar(&options.Mode, "mode", gcsMode, "Storage provider from which to download metrics from. Options are 's3' or 'gcs'. The default is 'gcs'.")
-	pflag.BoolVar(&options.OverrideBuildCount, "force-builds", false, "Whether to enforce number of builds to process as passed via --builds flag. "+
-		"This would override values defined by \"perfDashBuildsCount\" label on prow job")
-	pflag.IntVar(&options.DefaultBuildsCount, "builds", maxBuilds, "Total builds number")
-	pflag.StringArrayVar(&options.ConfigPaths, "configPath", []string{}, "Paths/urls to the prow config")
-	pflag.StringArrayVar(&options.GithubConfigDirs, "githubConfigDir", []string{}, "Github API url to the prow config directory, all configs from this dir will be used."+
-		"To specify more than one dir, this arg shall be specified multiple times, one time for each dir.")
-}
 
 func main() {
 	klog.InitFlags(nil)
@@ -78,77 +78,245 @@ func main() {
 }
 
 func run() error {
-	initDownloaderOptions()
+
 	pflag.Parse()
-	initGlobalConfig()
 
-	if options.DefaultBuildsCount > maxBuilds || options.DefaultBuildsCount < 0 {
-		klog.Infof("Invalid number of builds: %d, setting to %d", options.DefaultBuildsCount, maxBuilds)
-		options.DefaultBuildsCount = maxBuilds
-	}
+	// Open our jsonFile
+	fmt.Println("trying to open customized data")
+	jsonFile, err := os.Open("www/custom_data.json")
 
-	var metricsBucket MetricsBucket
-	var err error
-
-	switch options.Mode {
-	case gcsMode:
-		metricsBucket, err = NewGCSMetricsBucket(*logsBucket, *logsPath, *credentialPath)
-	case s3Mode:
-		metricsBucket, err = NewS3MetricsBucket(*logsBucket, *logsPath, *awsRegion)
-	default:
-		return fmt.Errorf("unexpected mode: %s", options.Mode)
-	}
-
+	// if we os.Open returns an error then handle it
 	if err != nil {
-		return fmt.Errorf("error creating metrics bucket downloader: %v", err)
+		fmt.Println(err)
 	}
 
-	downloader := NewDownloader(options, metricsBucket)
-	result := make(JobToCategoryData)
+	fmt.Println("Successfully Opened users.json")
 
-	if !*www {
-		result, err = downloader.getData()
-		if err != nil {
-			return fmt.Errorf("fetching data failed: %v", err)
-		}
-		prettyResult, err := json.MarshalIndent(result, "", " ")
-		if err != nil {
-			return fmt.Errorf("formatting data failed: %v", err)
-		}
-		klog.Infof("Result: %v", string(prettyResult))
-		return nil
+	// defer the closing of our jsonFile so that we can parse it later on
+	defer jsonFile.Close()
+
+	byteValue, _ := ioutil.ReadAll(jsonFile)
+
+	// 1. init buildData
+	var buildData BuildData
+
+	json.Unmarshal([]byte(byteValue), &buildData)
+
+	fmt.Println(buildData)
+
+	// customData := Data{
+	// 	Perc50: 12.55,
+	// 	Perc90: 30.55,
+	// 	Perc99: 39.50,
+	// }
+
+	customData := make(map[string]float64)
+	customData["Perc50"] = 12.55
+	customData["Perc90"] = 39.55
+	customData["Perc99"] = 42.55
+
+	customData2 := make(map[string]float64)
+	customData2["Perc50"] = 14.55
+	customData2["Perc90"] = 34.55
+	customData2["Perc99"] = 48.55
+
+	customLabel := Label{
+		Metric: "test-metric",
 	}
 
-	go func() {
-		for {
-			klog.Infof("Fetching new data...")
-			result, err = downloader.getData()
-			if err != nil {
-				klog.Errorf("Error fetching data: %v", err)
-				time.Sleep(errorDelay)
-				continue
-			}
-			klog.Infof("Data fetched, sleeping %v...", pollDuration)
-			time.Sleep(pollDuration)
-		}
-	}()
+	customDataItem := DataItem{
+		Data:   customData,
+		Unit:   "ms",
+		Labels: customLabel,
+	}
+
+	customDataItem2 := DataItem{
+		Data:   customData2,
+		Unit:   "ms",
+		Labels: customLabel,
+	}
+
+	customDataItemMap := make(map[string][]DataItem)
+	customDataItemCollection := []DataItem{customDataItem}
+	customDataItemCollection2 := []DataItem{customDataItem2}
+
+	customDataItemMap["data-1"] = customDataItemCollection
+	customDataItemMap["data-2"] = customDataItemCollection2
+
+	newBuildData := BuildData{
+		Builds:  customDataItemMap,
+		Job:     "newJob",
+		Version: "v2",
+	}
+
+	fmt.Println(newBuildData)
+
+	// 2. init metricToBuildData map
+	metricToBuildData := MetricToBuildData{
+		"customMetric":    &buildData,
+		"customMetricNew": &newBuildData,
+	}
+
+	// 3. init categoryToMetricData map
+	categoryToMetricData := CategoryToMetricData{
+		"customCategory": metricToBuildData,
+	}
+
+	// 4. init jobToCategoryData map
+	jobToCategoryData := JobToCategoryData{
+		"customJob": categoryToMetricData,
+	}
 
 	klog.Infof("Starting server...")
 	http.Handle("/", http.FileServer(http.Dir(*wwwDir)))
-	http.HandleFunc("/jobnames", result.ServeJobNames)
-	http.HandleFunc("/metriccategorynames", result.ServeCategoryNames)
-	http.HandleFunc("/metricnames", result.ServeMetricNames)
-	http.HandleFunc("/buildsdata", result.ServeBuildsData)
-	http.HandleFunc("/config", serveConfig)
+	http.HandleFunc("/jobnames", jobToCategoryData.ServeJobNames)
+	http.HandleFunc("/metriccategorynames", jobToCategoryData.ServeCategoryNames)
+	http.HandleFunc("/metricnames", jobToCategoryData.ServeMetricNames)
+	http.HandleFunc("/buildsdata", jobToCategoryData.ServeBuildsData)
+	// http.HandleFunc("/config", serveConfig)
+	fmt.Println("Serving Successful")
 	return http.ListenAndServe(*addr, nil)
+	return nil
 }
 
-func initGlobalConfig() {
-	globalConfig["logsBucket"] = *logsBucket
-	globalConfig["logsPath"] = *logsPath
-	globalConfig["storageURL"] = *storageURL
+// func serveConfig(res http.ResponseWriter, req *http.Request) {
+// 	serveHTTPObject(res, req, &globalConfig)
+// }
+
+func serveHTTPObject(res http.ResponseWriter, req *http.Request, obj interface{}) {
+	data, err := json.Marshal(obj)
+	// fmt.Println("==========serveHTTPOBject==========")
+	// fmt.Println(data)
+	if err != nil {
+		res.Header().Set("Content-type", "text/html")
+		res.WriteHeader(http.StatusInternalServerError)
+		_, err = res.Write([]byte(fmt.Sprintf("<h3>Internal Error</h3><p>%v", err)))
+		if err != nil {
+			klog.Errorf("unable to write error %v", err)
+		}
+		return
+	}
+	res.Header().Set("Content-type", "application/json")
+	res.WriteHeader(http.StatusOK)
+	_, err = res.Write(data)
+	if err != nil {
+		klog.Errorf("unable to write response data %v", err)
+	}
 }
 
-func serveConfig(res http.ResponseWriter, req *http.Request) {
-	serveHTTPObject(res, req, &globalConfig)
+func getURLParam(req *http.Request, name string) (string, bool) {
+	params, ok := req.URL.Query()[name]
+	if !ok || len(params) < 1 {
+		return "", false
+	}
+	return params[0], true
+}
+
+// ServeJobNames serves all available job names.
+func (j *JobToCategoryData) ServeJobNames(res http.ResponseWriter, req *http.Request) {
+	jobNames := make([]string, 0)
+	if j != nil {
+		for k := range *j {
+			jobNames = append(jobNames, k)
+		}
+	}
+	sort.Strings(jobNames)
+	serveHTTPObject(res, req, &jobNames)
+}
+
+// ServeCategoryNames serves all available category names for given job.
+func (j *JobToCategoryData) ServeCategoryNames(res http.ResponseWriter, req *http.Request) {
+	jobname, ok := getURLParam(req, "jobname")
+	if !ok {
+		klog.Warningf("url Param 'jobname' is missing")
+		return
+	}
+
+	tests, ok := (*j)[jobname]
+	if !ok {
+		klog.Infof("unknown jobname - %v", jobname)
+		return
+	}
+
+	categorynames := make([]string, 0)
+	for k := range tests {
+		categorynames = append(categorynames, k)
+	}
+	sort.Strings(categorynames)
+	serveHTTPObject(res, req, &categorynames)
+}
+
+// ServeMetricNames serves all available metric names for given job and category.
+func (j *JobToCategoryData) ServeMetricNames(res http.ResponseWriter, req *http.Request) {
+	jobname, ok := getURLParam(req, "jobname")
+	if !ok {
+		klog.Warningf("Url Param 'jobname' is missing")
+		return
+	}
+	categoryname, ok := getURLParam(req, "metriccategoryname")
+	if !ok {
+		klog.Warningf("Url Param 'metriccategoryname' is missing")
+		return
+	}
+
+	categories, ok := (*j)[jobname]
+	if !ok {
+		klog.Infof("unknown jobname - %v", jobname)
+		return
+	}
+	tests, ok := categories[categoryname]
+	if !ok {
+		klog.Infof("unknown metriccategoryname - %v", categoryname)
+		return
+	}
+
+	metricnames := make([]string, 0)
+	for k := range tests {
+		metricnames = append(metricnames, k)
+	}
+	sort.Strings(metricnames)
+	serveHTTPObject(res, req, &metricnames)
+}
+
+// ServeBuildsData serves builds data for given job name, category name and test name.
+func (j *JobToCategoryData) ServeBuildsData(res http.ResponseWriter, req *http.Request) {
+	//fmt.Printf("---------------1---------------")
+
+	jobname, ok := getURLParam(req, "jobname")
+	if !ok {
+		klog.Warningf("Url Param 'jobname' is missing")
+		return
+	}
+	//fmt.Printf("---------------2---------------")
+	categoryname, ok := getURLParam(req, "metriccategoryname")
+	if !ok {
+		klog.Warningf("Url Param 'metriccategoryname' is missing")
+		return
+	}
+	//fmt.Printf("---------------3---------------")
+	metricname, ok := getURLParam(req, "metricname")
+	if !ok {
+		klog.Warningf("Url Param 'metricname' is missing")
+		return
+	}
+	//fmt.Printf("---------------4---------------")
+	categories, ok := (*j)[jobname]
+	if !ok {
+		klog.Infof("unknown jobname - %v", jobname)
+		return
+	}
+	//fmt.Printf("---------------5---------------")
+	tests, ok := categories[categoryname]
+	if !ok {
+		klog.Infof("unknown metriccategoryname - %v", categoryname)
+		return
+	}
+	//mt.Printf("---------------6---------------")
+	builds, ok := tests[metricname]
+	if !ok {
+		klog.Infof("unknown metricname - %v", metricname)
+		return
+	}
+	fmt.Printf("---------------7---------------")
+	serveHTTPObject(res, req, builds)
 }

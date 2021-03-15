@@ -15,10 +15,6 @@ run: perfdash
 	./perfdash \
 		--www \
 		--address=0.0.0.0:8080 \
-		--builds=20 \
-		--force-builds \
-		--githubConfigDir=https://api.github.com/repos/kubernetes/test-infra/contents/config/jobs/kubernetes/sig-scalability \
-		--githubConfigDir=https://api.github.com/repos/kubernetes/test-infra/contents/config/jobs/kubernetes/sig-release/release-branch-jobs
 
 container: perfdash
 	docker build --pull -t $(REPO)/perfdash:$(TAG) .
