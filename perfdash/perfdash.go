@@ -40,6 +40,12 @@ type BuildData struct {
 	Version string                `json:"version"`
 }
 
+type JerryBuildData struct {
+	Builds  []JerryDataItem `json:"builds"`
+	Job     string          `json:"job"`
+	Version string          `json:"version"`
+}
+
 // DataItem is the data point.
 type DataItem struct {
 	// Data is a map from bucket to real data point (e.g. "Perc90" -> 23.5). Notice
@@ -52,7 +58,18 @@ type DataItem struct {
 	Labels Label `json:"labels,omitempty"`
 }
 
-type Data struct {
+type JerryDataItem struct {
+	// Data is a map from bucket to real data point (e.g. "Perc90" -> 23.5). Notice
+	// that all data items with the same label combination should have the same buckets.
+	Data JerryData `json:"data"`
+	// Unit is the data unit. Notice that all data items with the same label combination
+	// should have the same unit.
+	Unit string `json:"unit"`
+	// Labels is the labels of the data item.
+	Labels Label `json:"labels,omitempty"`
+}
+
+type JerryData struct {
 	Perc50 float64 `json:"Perc50"`
 	Perc90 float64 `json:"Perc90"`
 	Perc99 float64 `json:"Perc99"`
@@ -98,27 +115,22 @@ func run() error {
 	byteValue, _ := ioutil.ReadAll(jsonFile)
 
 	// 1. init buildData
-	var buildData BuildData
+	var jerryBuildData JerryBuildData
 
-	json.Unmarshal([]byte(byteValue), &buildData)
+	json.Unmarshal([]byte(byteValue), &jerryBuildData)
 
-	fmt.Println(buildData)
+	// fmt.Println(jerryBuildData.Builds)
 
-	// customData := Data{
-	// 	Perc50: 12.55,
-	// 	Perc90: 30.55,
-	// 	Perc99: 39.50,
-	// }
-
+	// === custom data ====
 	customData := make(map[string]float64)
 	customData["Perc50"] = 12.55
 	customData["Perc90"] = 39.55
 	customData["Perc99"] = 42.55
 
-	customData2 := make(map[string]float64)
-	customData2["Perc50"] = 14.55
-	customData2["Perc90"] = 34.55
-	customData2["Perc99"] = 48.55
+	// customData2 := make(map[string]float64)
+	// customData2["Perc50"] = 14.55
+	// customData2["Perc90"] = 34.55
+	// customData2["Perc99"] = 48.55
 
 	customLabel := Label{
 		Metric: "test-metric",
@@ -130,31 +142,53 @@ func run() error {
 		Labels: customLabel,
 	}
 
-	customDataItem2 := DataItem{
-		Data:   customData2,
-		Unit:   "ms",
-		Labels: customLabel,
-	}
+	// customDataItem2 := DataItem{
+	// 	Data:   customData2,
+	// 	Unit:   "ms",
+	// 	Labels: customLabel,
+	// }
 
-	customDataItemMap := make(map[string][]DataItem)
-	customDataItemCollection := []DataItem{customDataItem}
-	customDataItemCollection2 := []DataItem{customDataItem2}
+	customBuilds := make(map[string][]DataItem)
+	customDataItemSlice := []DataItem{customDataItem}
+	// customDataItemCollection2 := []DataItem{customDataItem2}
 
-	customDataItemMap["data-1"] = customDataItemCollection
-	customDataItemMap["data-2"] = customDataItemCollection2
+	customBuilds["data-1"] = customDataItemSlice
+	// customDataItemMap["data-2"] = customDataItemCollection2
 
 	newBuildData := BuildData{
-		Builds:  customDataItemMap,
+		Builds:  customBuilds,
 		Job:     "newJob",
 		Version: "v2",
 	}
 
 	fmt.Println(newBuildData)
+	// === custom data ====
+
+	// iterate through jerryBuildData and convert that to metricToBuildData
+	jerryBuilds := make(map[string][]DataItem)
+	for i, temp := range jerryBuildData.Builds {
+		tempCustomData := make(map[string]float64)
+		tempCustomData["Perc50"] = temp.Data.Perc50
+		tempCustomData["Perc90"] = temp.Data.Perc90
+		tempCustomData["Perc99"] = temp.Data.Perc99
+		tempDataItem := DataItem{
+			Data:   tempCustomData,
+			Unit:   "ms",
+			Labels: customLabel,
+		}
+		jerryDataItemSlice := []DataItem{tempDataItem}
+		jerryBuilds[string(i)] = jerryDataItemSlice
+	}
+
+	newnewBuildData := BuildData{
+		Builds:  jerryBuilds,
+		Job:     "jerryJob",
+		Version: "vjerry",
+	}
 
 	// 2. init metricToBuildData map
 	metricToBuildData := MetricToBuildData{
-		"customMetric":    &buildData,
-		"customMetricNew": &newBuildData,
+		"customMetricNew": &newnewBuildData,
 	}
 
 	// 3. init categoryToMetricData map
@@ -317,6 +351,6 @@ func (j *JobToCategoryData) ServeBuildsData(res http.ResponseWriter, req *http.R
 		klog.Infof("unknown metricname - %v", metricname)
 		return
 	}
-	fmt.Printf("---------------7---------------")
+	// fmt.Printf("---------------7---------------")
 	serveHTTPObject(res, req, builds)
 }
