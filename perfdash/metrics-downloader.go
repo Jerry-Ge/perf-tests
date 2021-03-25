@@ -18,6 +18,8 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -129,15 +131,40 @@ func (g *Downloader) getJobData(wg *sync.WaitGroup, result JobToCategoryData, re
 					}
 					for _, artifact := range artifacts {
 						metricsFileName := filepath.Base(artifact)
-						resultCategory := getResultCategory(metricsFileName, filePrefix, categoryLabel, artifacts)
-						fileName := g.artifactName(tests, metricsFileName)
-						testDataResponse, err := g.MetricsBkt.ReadFile(job, buildNumber, fileName)
+						// resultCategory := getResultCategory(metricsFileName, filePrefix, categoryLabel, artifacts)
+						// fileName := g.artifactName(tests, metricsFileName)
+						// testDataResponse, err := g.MetricsBkt.ReadFile(job, buildNumber, fileName)
+						fmt.Printf(metricsFileName)
+						fmt.Printf(categoryLabel)
+						fmt.Printf(testLabel)
+						// Hack: hardcode the fileName to be our fileName, update
+						fileName := "/root/.go/src/perf-tests/perfdash/jerry/PodStartupLatency_PodStartupLatency_node-throughput_2020.json"
+						jsonFile, err := os.Open(fileName)
+						defer jsonFile.Close()
+						testDataResponse, _ := ioutil.ReadAll(jsonFile)
+
+						JerryPrefix := "E2E"
+						JerryResultCategory := "configmap_vol_per_node_E2E"
+						JerryTestLabel := "PodStartup"
+						JerryJob := "ci-kubernetes-storage-scalability"
+
 						if err != nil {
 							klog.Infof("Error when reading response Body for %q: %v", fileName, err)
 							continue
 						}
-						buildData := getBuildData(result, tests.Prefix, resultCategory, testLabel, job, resultLock)
-						testDescription.Parser(testDataResponse, buildNumber, buildData)
+						buildData := getBuildData(result, JerryPrefix, JerryResultCategory, JerryTestLabel, JerryJob, resultLock)
+						// fmt.Println(buildData)
+						// fmt.Println(testDataResponse)
+						// testDescription.Parser = parsePerfData
+						parsePerfData(testDataResponse, buildNumber, buildData)
+
+						// Hack: create a ad-hoc testDescription with Parser here.
+						// JerryDescription := TestDescription {
+						// 	Name:             "density",
+						// 	OutputFilePrefix: "PodStartupLatency_PodStartupLatency",
+						// 	Parser:           parsePerfData,
+						// }
+						// JerryDescription.Parser(testDataResponse, buildNumber, buildData)
 					}
 				}
 			}

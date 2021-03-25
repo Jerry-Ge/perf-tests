@@ -9,7 +9,7 @@ test: perfdash.go parser.go config.go metrics-downloader-helper.go metrics-downl
 	go test
 
 perfdash: test
-	go build -a -installsuffix cgo -ldflags '-w' -o perfdash
+	go build -a -installsuffix cgo -ldflags="" -gcflags="all=-N -l" -o perfdash
 
 run: perfdash
 	./perfdash \
