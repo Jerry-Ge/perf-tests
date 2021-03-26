@@ -79,27 +79,28 @@ func (g *Downloader) getJobData(wg *sync.WaitGroup, result JobToCategoryData, re
 	defer wg.Done()
 
 	// Hack: hardcode the fileName to be our fileName, update
-	buildNumber := 123456789
-	fileName := "/root/.go/src/perf-tests/perfdash/jerry/PodStartupLatency_PodStartupLatency_node-throughput_2020.json"
-	jsonFile, err := os.Open(fileName)
-	defer jsonFile.Close()
-	testDataResponse, _ := ioutil.ReadAll(jsonFile)
 
-	JerryPrefix := "E2E"
-	JerryResultCategory := "configmap_vol_per_node_E2E"
-	JerryTestLabel := "PodStartup"
-	JerryJob := "ci-kubernetes-storage-scalability"
+	// TODO: update the correct build numbers
+	for buildNumber := 1234; buildNumber < 1239; buildNumber++ {
+		// TODO: do not hard code the fileName here.
+		fileName := "/root/.go/src/perf-tests/perfdash/jerry/PodStartupLatency_PodStartupLatency_node-throughput_2020.json"
+		jsonFile, err := os.Open(fileName)
+		defer jsonFile.Close()
+		testDataResponse, _ := ioutil.ReadAll(jsonFile)
 
-	if err != nil {
-		klog.Infof("Error when reading response Body for %q: %v", fileName, err)
+		JerryPrefix := "【Prefix】"
+		JerryResultCategory := "【Result Cateogry】"
+		JerryTestLabel := "【Test Label】"
+		JerryJob := "【Job】"
+
+		if err != nil {
+			klog.Infof("Error when reading response Body for %q: %v", fileName, err)
+		}
+
+		buildData := getBuildData(result, JerryPrefix, JerryResultCategory, JerryTestLabel, JerryJob, resultLock)
+
+		parsePerfData(testDataResponse, buildNumber, buildData)
 	}
-
-	buildData := getBuildData(result, JerryPrefix, JerryResultCategory, JerryTestLabel, JerryJob, resultLock)
-	// fmt.Println(buildData)
-	// fmt.Println(testDataResponse)
-	// testDescription.Parser = parsePerfData
-	parsePerfData(testDataResponse, buildNumber, buildData)
-
 }
 
 func (g *Downloader) artifactName(jobAttrs Tests, file string) string {
