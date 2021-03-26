@@ -21,8 +21,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,36 +56,11 @@ func NewDownloader(opt *DownloaderOptions, bkt MetricsBucket) *Downloader {
 
 // TODO(random-liu): Only download and update new data each time.
 func (g *Downloader) getData() (JobToCategoryData, error) {
-	configPaths := make([]string, len(g.Options.ConfigPaths))
-	copy(configPaths, g.Options.ConfigPaths)
-	for _, githubURL := range g.Options.GithubConfigDirs {
-		githubConfigPaths, err := GetConfigsFromGithub(githubURL)
-		if err != nil {
-			return nil, err
-		}
-		configPaths = append(configPaths, githubConfigPaths...)
-	}
-
-	klog.Infof("Config paths - %d", len(configPaths))
-	for i, configPath := range configPaths {
-		klog.Infof("Config path %d: %s", i+1, configPath)
-	}
-
-	newJobs, err := getProwConfig(configPaths)
-	if err != nil {
-		return nil, fmt.Errorf("failed to refresh config: %v", err)
-	}
-	klog.Infof("Getting Data from %v...", options.Mode)
 	result := make(JobToCategoryData)
 	var resultLock sync.Mutex
 	var wg sync.WaitGroup
-	wg.Add(len(newJobs))
-	for job, tests := range newJobs {
-		if tests.Prefix == "" {
-			return nil, fmt.Errorf("invalid empty Prefix for job %s", job)
-		}
-		go g.getJobData(&wg, result, &resultLock, job, tests)
-	}
+	wg.Add(1)
+	go g.getJobData(&wg, result, &resultLock)
 	wg.Wait()
 	return result, nil
 }
@@ -102,74 +75,31 @@ updates result with parsed metrics for a given prow job. Assumptions:
   {{OutputFilePrefix}}_{{Name}}_{{SuiteId}}. SuiteId is prepended to the category label,
   which allows comparing metrics across several runs in a given suite
 */
-func (g *Downloader) getJobData(wg *sync.WaitGroup, result JobToCategoryData, resultLock *sync.Mutex, job string, tests Tests) {
+func (g *Downloader) getJobData(wg *sync.WaitGroup, result JobToCategoryData, resultLock *sync.Mutex) {
 	defer wg.Done()
-	buildNumbers, err := g.MetricsBkt.GetBuildNumbers(job)
+
+	// Hack: hardcode the fileName to be our fileName, update
+	buildNumber := 123456789
+	fileName := "/root/.go/src/perf-tests/perfdash/jerry/PodStartupLatency_PodStartupLatency_node-throughput_2020.json"
+	jsonFile, err := os.Open(fileName)
+	defer jsonFile.Close()
+	testDataResponse, _ := ioutil.ReadAll(jsonFile)
+
+	JerryPrefix := "E2E"
+	JerryResultCategory := "configmap_vol_per_node_E2E"
+	JerryTestLabel := "PodStartup"
+	JerryJob := "ci-kubernetes-storage-scalability"
+
 	if err != nil {
-		panic(err)
+		klog.Infof("Error when reading response Body for %q: %v", fileName, err)
 	}
 
-	buildsToFetch := tests.BuildsCount
-	if buildsToFetch < 1 || g.Options.OverrideBuildCount {
-		buildsToFetch = g.Options.DefaultBuildsCount
-	}
-	klog.Infof("Builds to fetch for %v: %v", job, buildsToFetch)
+	buildData := getBuildData(result, JerryPrefix, JerryResultCategory, JerryTestLabel, JerryJob, resultLock)
+	// fmt.Println(buildData)
+	// fmt.Println(testDataResponse)
+	// testDescription.Parser = parsePerfData
+	parsePerfData(testDataResponse, buildNumber, buildData)
 
-	sort.Sort(sort.Reverse(sort.IntSlice(buildNumbers)))
-	for index := 0; index < buildsToFetch && index < len(buildNumbers); index++ {
-		buildNumber := buildNumbers[index]
-		klog.Infof("Fetching %s build %v...", job, buildNumber)
-		for categoryLabel, categoryMap := range tests.Descriptions {
-			for testLabel, testDescriptions := range categoryMap {
-				for _, testDescription := range testDescriptions {
-					filePrefix := fmt.Sprintf("%v_%v", testDescription.OutputFilePrefix, testDescription.Name)
-					searchPrefix := g.artifactName(tests, filePrefix)
-					artifacts, err := g.MetricsBkt.ListFilesInBuild(job, buildNumber, searchPrefix)
-					if err != nil || len(artifacts) == 0 {
-						klog.Infof("Error while looking for %s* in %s build %v: %v", searchPrefix, job, buildNumber, err)
-						continue
-					}
-					for _, artifact := range artifacts {
-						metricsFileName := filepath.Base(artifact)
-						// resultCategory := getResultCategory(metricsFileName, filePrefix, categoryLabel, artifacts)
-						// fileName := g.artifactName(tests, metricsFileName)
-						// testDataResponse, err := g.MetricsBkt.ReadFile(job, buildNumber, fileName)
-						fmt.Printf(metricsFileName)
-						fmt.Printf(categoryLabel)
-						fmt.Printf(testLabel)
-						// Hack: hardcode the fileName to be our fileName, update
-						fileName := "/root/.go/src/perf-tests/perfdash/jerry/PodStartupLatency_PodStartupLatency_node-throughput_2020.json"
-						jsonFile, err := os.Open(fileName)
-						defer jsonFile.Close()
-						testDataResponse, _ := ioutil.ReadAll(jsonFile)
-
-						JerryPrefix := "E2E"
-						JerryResultCategory := "configmap_vol_per_node_E2E"
-						JerryTestLabel := "PodStartup"
-						JerryJob := "ci-kubernetes-storage-scalability"
-
-						if err != nil {
-							klog.Infof("Error when reading response Body for %q: %v", fileName, err)
-							continue
-						}
-						buildData := getBuildData(result, JerryPrefix, JerryResultCategory, JerryTestLabel, JerryJob, resultLock)
-						// fmt.Println(buildData)
-						// fmt.Println(testDataResponse)
-						// testDescription.Parser = parsePerfData
-						parsePerfData(testDataResponse, buildNumber, buildData)
-
-						// Hack: create a ad-hoc testDescription with Parser here.
-						// JerryDescription := TestDescription {
-						// 	Name:             "density",
-						// 	OutputFilePrefix: "PodStartupLatency_PodStartupLatency",
-						// 	Parser:           parsePerfData,
-						// }
-						// JerryDescription.Parser(testDataResponse, buildNumber, buildData)
-					}
-				}
-			}
-		}
-	}
 }
 
 func (g *Downloader) artifactName(jobAttrs Tests, file string) string {
